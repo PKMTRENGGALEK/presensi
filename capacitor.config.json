@@ -1,0 +1,39 @@
+{
+  "appId": "com.jka.presensi",
+  "appName": "Presensi JKA",
+  "webDir": "www",
+  "server": {
+    "url": "https://puskesmastrenggalek.id/presensi/pegawai/",
+    "cleartext": false,
+    "allowNavigation": [
+      "https://puskesmastrenggalek.id/presensi/*"
+    ]
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#0d9488",
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "launchAutoHide": true,
+      "backgroundColor": "#0d9488",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false,
+      "splashFullScreen": true,
+      "splashImmersive": true
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0d9488"
+    },
+    "Geolocation": {
+      "permissions": ["location"]
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    }
+  }
+}
