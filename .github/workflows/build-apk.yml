@@ -1,0 +1,145 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: 'https://puskesmastrenggalek.id/presensi/pegawai/'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK & accept licenses
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+
+          SDKMANAGER=$(find "$ANDROID_SDK_ROOT" -name sdkmanager -type f 2>/dev/null | head -n 1)
+          if [ -z "$SDKMANAGER" ]; then
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+            curl -sL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
+            unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
+            rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            mv /tmp/cmdtools/cmdline-tools/* "$ANDROID_SDK_ROOT/cmdline-tools/latest/"
+            SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          echo "Using: $SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses >/tmp/licenses.log 2>&1 || true
+          yes | "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            >/tmp/sdkinstall.log 2>&1 || true
+          tail -n 15 /tmp/sdkinstall.log || true
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+
+      - name: Install npm dependencies
+        run: |
+          rm -f package-lock.json
+          npm install --prefer-online --no-fund --no-audit
+
+      - name: Inject server URL (opsional)
+        if: ${{ github.event.inputs.server_url != '' }}
+        env:
+          URL: ${{ github.event.inputs.server_url }}
+        run: |
+          python3 - << 'PY'
+          import json, os
+          url = os.environ.get("URL") or ""
+          with open("capacitor.config.json") as f:
+              cfg = json.load(f)
+          if url:
+              cfg.setdefault("server", {})["url"] = url
+              host = url.split("/")[2] if "://" in url else ""
+              if host:
+                  cfg["server"]["allowNavigation"] = [f"https://{host}/*"]
+          with open("capacitor.config.json", "w") as f:
+              json.dump(cfg, f, indent=2)
+          print(json.dumps(cfg, indent=2))
+          PY
+
+      - name: Add Android platform
+        run: |
+          npx cap add android || true
+
+      - name: Generate app icons & splash from resources/
+        run: |
+          if [ -f resources/icon.png ]; then
+            echo "Icon ditemukan, generate assets..."
+            npx @capacitor/assets generate --android \
+              --iconBackgroundColor '#0d9488' \
+              --splashBackgroundColor '#0d9488' || \
+            echo "Peringatan: generate assets gagal, akan pakai default"
+          else
+            echo "Tidak ada resources/icon.png"
+          fi
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Set Android permissions
+        run: |
+          python3 - << 'PY'
+          from pathlib import Path
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          if not p.exists():
+              print("Manifest belum ada, skip")
+              raise SystemExit(0)
+          t = p.read_text(encoding="utf-8")
+          perms = [
+              '    <uses-permission android:name="android.permission.INTERNET" />',
+              '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
+              '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />',
+              '    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />',
+              '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />',
+              '    <uses-permission android:name="android.permission.VIBRATE" />',
+              '    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />',
+          ]
+          for line in perms:
+              if line.strip() not in t:
+                  t = t.replace("<application", line + "\n    <application", 1)
+          p.write_text(t, encoding="utf-8")
+          print("Manifest OK - permissions added")
+          PY
+
+      - name: Build Debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Presensi-JKA-APK
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
